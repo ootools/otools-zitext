@@ -1,0 +1,53 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "lib": [
+      "ES2020",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "module": "ESNext",
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "paths": {
+      "@tauri-apps/api/core": [
+        "./.build/shim/core.ts"
+      ],
+      "@tauri-apps/api/event": [
+        "./.build/shim/event.ts"
+      ],
+      "@tauri-apps/api/window": [
+        "./.build/shim/window.ts"
+      ],
+      "@tauri-apps/api/app": [
+        "./.build/shim/app.ts"
+      ],
+      "@tauri-apps/plugin-dialog": [
+        "./.build/shim/dialog.ts"
+      ],
+      "@tauri-apps/plugin-clipboard-manager": [
+        "./.build/shim/clipboard.ts"
+      ]
+    }
+  },
+  "include": [
+    ".build/src",
+    ".build/shim",
+    ".build/tests"
+  ],
+  "exclude": [
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "**/node_modules/**"
+  ]
+}

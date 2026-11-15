@@ -1,0 +1,1 @@
+import{t as e}from"./host-BcAJSe7G.js";var t=()=>e().readClipboard(),n=t=>e().writeClipboard(t);export{n,t};

@@ -1,0 +1,462 @@
+import React, { useState, useEffect, useRef } from 'react';
+import type { Settings } from '../types';
+import { FONT_FAMILIES, UI_FONTS } from '../utils/fontOptions';
+import { MAX_FONT_SIZE, MIN_FONT_SIZE } from '../constants';
+
+/** Appearance shown live while Settings is open; Save keeps it, Cancel drops it. */
+export type AppearancePreview = Pick<Settings, 'theme' | 'uiFont' | 'fontFamily' | 'fontSize'>;
+
+interface SettingsModalProps {
+    isOpen: boolean;
+    onClose: () => void;
+    /** The saved settings (not the preview), so the form starts from them. */
+    settings: Settings;
+    onSave: (settings: Partial<Settings>) => void;
+    /** Called as theme, fonts or size change, so the app shows them at once. */
+    onPreview?: (preview: AppearancePreview) => void;
+}
+
+type SettingsTab = 'editor' | 'files' | 'privacy' | 'advanced';
+
+const TABS: { key: SettingsTab; label: string; icon: string }[] = [
+    { key: 'editor',   label: 'Editor',   icon: 'E' },
+    { key: 'files',    label: 'Files',    icon: 'F' },
+    { key: 'privacy',  label: 'Privacy',  icon: 'P' },
+    { key: 'advanced', label: 'Advanced', icon: 'A' },
+];
+
+function Toggle({ checked, onChange, label, description }: {
+    checked: boolean; onChange: (v: boolean) => void; label: string; description?: string;
+}) {
+    return (
+        <div className="s-row s-row-toggle" onClick={() => onChange(!checked)}>
+            <div className="s-row-text">
+                <span className="s-row-label">{label}</span>
+                {description && <span className="s-row-desc">{description}</span>}
+            </div>
+            <button
+                role="switch"
+                aria-checked={checked}
+                className={`s-switch ${checked ? 'on' : ''}`}
+                onClick={(e) => { e.stopPropagation(); onChange(!checked); }}
+            >
+                <span className="s-switch-thumb" />
+            </button>
+        </div>
+    );
+}
+
+interface DropdownOption { value: string | number; label: string; }
+
+function Dropdown({ value, options, onChange, ariaLabel }: {
+    value: string | number; options: DropdownOption[]; onChange: (v: string) => void; ariaLabel?: string;
+}) {
+    const [open, setOpen] = useState(false);
+    const [menuStyle, setMenuStyle] = useState<React.CSSProperties>({});
+    const rootRef = useRef<HTMLDivElement>(null);
+    const triggerRef = useRef<HTMLButtonElement>(null);
+
+    const selected = options.find(o => String(o.value) === String(value));
+    const focusOption = (index: number) => {
+        const items = rootRef.current?.querySelectorAll<HTMLElement>('[role="option"]');
+        items?.[(index + items.length) % items.length]?.focus();
+    };
+
+    const openMenu = () => {
+        const el = triggerRef.current;
+        if (!el) return;
+        const rect = el.getBoundingClientRect();
+        const margin = 8;
+        const gap = 4;
+        // Constrain to the modal's content area — measuring against the footer's top
+        // (not the viewport) is what keeps the menu from ever spilling onto the buttons.
+        const modal = el.closest('.s-modal');
+        const footer = modal?.querySelector('.s-footer');
+        const boundBottom = footer
+            ? footer.getBoundingClientRect().top - margin
+            : window.innerHeight - margin;
+        const boundTop = modal
+            ? modal.getBoundingClientRect().top + margin
+            : margin;
+        const spaceBelow = boundBottom - rect.bottom - gap;
+        const spaceAbove = rect.top - boundTop - gap;
+        // Flip up when there isn't enough room below and there's more above it.
+        const openUp = spaceBelow < 200 && spaceAbove > spaceBelow;
+        // maxHeight never exceeds the chosen side's space, so the menu stays inside
+        // the content area on whichever side it opens.
+        const maxHeight = Math.max(96, Math.min(280, openUp ? spaceAbove : spaceBelow));
+        setMenuStyle({
+            position: 'fixed',
+            left: rect.left,
+            width: rect.width,
+            maxHeight,
+            ...(openUp
+                ? { bottom: window.innerHeight - rect.top + gap }
+                : { top: rect.bottom + gap }),
+        });
+        setOpen(true);
+    };
+
+    useEffect(() => {
+        if (!open) return;
+        const close = () => setOpen(false);
+        const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); setOpen(false); } };
+        const onDown = (e: MouseEvent) => {
+            if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+        };
+        // Close when the page behind scrolls (the fixed-position menu would detach),
+        // but ignore scrolls originating inside the menu so it stays open and scrollable.
+        const onScroll = (e: Event) => {
+            if (rootRef.current && rootRef.current.contains(e.target as Node)) return;
+            setOpen(false);
+        };
+        window.addEventListener('resize', close);
+        window.addEventListener('scroll', onScroll, true);
+        document.addEventListener('keydown', onKey, true);
+        document.addEventListener('mousedown', onDown);
+        return () => {
+            window.removeEventListener('resize', close);
+            window.removeEventListener('scroll', onScroll, true);
+            document.removeEventListener('keydown', onKey, true);
+            document.removeEventListener('mousedown', onDown);
+        };
+    }, [open]);
+
+    return (
+        <div className="s-dropdown" ref={rootRef}>
+            <button
+                ref={triggerRef}
+                type="button"
+                className={`s-dropdown-trigger ${open ? 'open' : ''}`}
+                onClick={() => (open ? setOpen(false) : openMenu())}
+                onKeyDown={(event) => {
+                    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                        event.preventDefault();
+                        if (!open) openMenu();
+                        requestAnimationFrame(() => {
+                            const selectedIndex = Math.max(
+                                0,
+                                options.findIndex(option => String(option.value) === String(value)),
+                            );
+                            focusOption(event.key === 'ArrowDown' ? selectedIndex : options.length - 1);
+                        });
+                    }
+                }}
+                aria-haspopup="listbox"
+                aria-expanded={open}
+                aria-label={ariaLabel}
+            >
+                <span className="s-dropdown-value">{selected?.label ?? ''}</span>
+            </button>
+            {open && (
+                <ul className="s-dropdown-menu" role="listbox" style={menuStyle}>
+                    {options.map(o => {
+                        const isSel = String(o.value) === String(value);
+                        return (
+                            <li
+                                key={String(o.value)}
+                                role="option"
+                                tabIndex={isSel ? 0 : -1}
+                                aria-selected={isSel}
+                                className={`s-dropdown-option ${isSel ? 'selected' : ''}`}
+                                onClick={() => { onChange(String(o.value)); setOpen(false); }}
+                                onKeyDown={(event) => {
+                                    const index = options.indexOf(o);
+                                    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                                        event.preventDefault();
+                                        focusOption(index + (event.key === 'ArrowDown' ? 1 : -1));
+                                    } else if (event.key === 'Enter' || event.key === ' ') {
+                                        event.preventDefault();
+                                        onChange(String(o.value));
+                                        setOpen(false);
+                                        triggerRef.current?.focus();
+                                    } else if (event.key === 'Escape') {
+                                        setOpen(false);
+                                        triggerRef.current?.focus();
+                                    }
+                                }}
+                            >
+                                {o.label}
+                            </li>
+                        );
+                    })}
+                </ul>
+            )}
+        </div>
+    );
+}
+
+function SelectRow({ label, hint, value, onChange, options }: {
+    label: string; hint?: string; value: string | number; onChange: (v: string) => void; options: DropdownOption[];
+}) {
+    return (
+        <div className="s-row">
+            <span className="s-row-label">
+                {label}
+                {hint && <span className="s-row-hint">{hint}</span>}
+            </span>
+            <Dropdown value={value} options={options} onChange={onChange} ariaLabel={label} />
+        </div>
+    );
+}
+
+export function NumberRow({ label, value, onChange, min, max, step }: {
+    label: string; value: number; onChange: (v: number) => void; min?: number; max?: number; step?: number;
+}) {
+    // Typing keeps the raw text; the value is clamped when the field is left
+    // or Enter is pressed. Clamping each keystroke turned "1500" into 10000.
+    const [draft, setDraft] = useState(String(value));
+    useEffect(() => { setDraft(String(value)); }, [value]);
+    const commit = () => {
+        const v = parseInt(draft);
+        const clamped = isNaN(v) ? value : Math.max(min ?? 0, Math.min(max ?? 999, v));
+        setDraft(String(clamped));
+        if (clamped !== value) onChange(clamped);
+    };
+    return (
+        <div className="s-row">
+            <span className="s-row-label">{label}</span>
+            <input
+                type="number"
+                className="s-number"
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onBlur={commit}
+                onKeyDown={(e) => { if (e.key === 'Enter') commit(); }}
+                min={min} max={max} step={step}
+            />
+        </div>
+    );
+}
+
+/* Segmented control — for a short, mutually exclusive set where seeing all the
+   options at once beats opening a dropdown. */
+function SegmentedRow({ label, hint, value, onChange, options }: {
+    label: string;
+    hint?: string;
+    value: string;
+    onChange: (v: string) => void;
+    options: { value: string; label: string }[];
+}) {
+    return (
+        <div className="s-row">
+            <span className="s-row-label">
+                {label}
+                {hint && <span className="s-row-hint">{hint}</span>}
+            </span>
+            <div className="s-segmented" role="group" aria-label={label}>
+                {options.map(opt => (
+                    <button
+                        key={opt.value}
+                        type="button"
+                        className={`s-segment${value === opt.value ? ' active' : ''}`}
+                        aria-pressed={value === opt.value}
+                        onClick={() => onChange(opt.value)}
+                    >
+                        {opt.label}
+                    </button>
+                ))}
+            </div>
+        </div>
+    );
+}
+
+/* Slider plus a readout, so a value with a sensible range can be dragged
+   instead of typed. */
+function SliderRow({ label, hint, value, onChange, min, max }: {
+    label: string; hint?: string; value: number; onChange: (v: number) => void; min: number; max: number;
+}) {
+    return (
+        <div className="s-row">
+            <span className="s-row-label">
+                {label}
+                {hint && <span className="s-row-hint">{hint}</span>}
+            </span>
+            <div className="s-slider-group">
+                <input
+                    type="range"
+                    className="s-slider"
+                    min={min}
+                    max={max}
+                    value={value}
+                    aria-label={label}
+                    onChange={(e) => onChange(parseInt(e.target.value))}
+                />
+                <span className="s-slider-value">{value}</span>
+            </div>
+        </div>
+    );
+}
+
+function SectionHeader({ title }: { title: string }) {
+    return <div className="s-section-header">{title}</div>;
+}
+
+function InfoBlock({ children }: { children: React.ReactNode }) {
+    return <div className="s-info-block">{children}</div>;
+}
+
+export function SettingsModal({ isOpen, onClose, settings, onSave, onPreview }: SettingsModalProps) {
+    const [activeTab, setActiveTab] = useState<SettingsTab>('editor');
+    const [theme, setTheme] = useState(settings.theme);
+    const [fontFamily, setFontFamily] = useState(settings.fontFamily);
+    const [uiFont, setUiFont] = useState(settings.uiFont);
+    const [fontSize, setFontSize] = useState(settings.fontSize);
+    const [wordWrap, setWordWrap] = useState(settings.wordWrap);
+    const [autosave, setAutosave] = useState(settings.autosave);
+    const [autosaveDelay, setAutosaveDelay] = useState(settings.autosaveDelay);
+    const [showMinimap, setShowMinimap] = useState(settings.showMinimap);
+    const [enableColumnSelection, setEnableColumnSelection] = useState(settings.enableColumnSelection);
+    const [tabSize, setTabSize] = useState(settings.tabSize);
+    const [insertSpaces, setInsertSpaces] = useState(settings.insertSpaces);
+    const [formatOnSave, setFormatOnSave] = useState(settings.formatOnSave);
+    const [checkForUpdates, setCheckForUpdates] = useState(settings.checkForUpdates);
+
+    useEffect(() => {
+        if (!isOpen) return;
+        setTheme(settings.theme);
+        setFontFamily(settings.fontFamily);
+        setUiFont(settings.uiFont);
+        setFontSize(settings.fontSize);
+        setWordWrap(settings.wordWrap);
+        setAutosave(settings.autosave);
+        setAutosaveDelay(settings.autosaveDelay);
+        setShowMinimap(settings.showMinimap);
+        setEnableColumnSelection(settings.enableColumnSelection);
+        setTabSize(settings.tabSize);
+        setInsertSpaces(settings.insertSpaces);
+        setFormatOnSave(settings.formatOnSave);
+        setCheckForUpdates(settings.checkForUpdates);
+    }, [isOpen, settings]);
+
+    // Show theme, font and size changes as they are picked.
+    useEffect(() => {
+        if (isOpen) onPreview?.({ theme, uiFont, fontFamily, fontSize });
+    }, [isOpen, onPreview, theme, uiFont, fontFamily, fontSize]);
+
+    if (!isOpen) return null;
+
+    const handleSave = () => {
+        onSave({
+            theme, fontFamily, uiFont, fontSize, wordWrap, autosave, autosaveDelay,
+            showMinimap, enableColumnSelection, tabSize,
+            insertSpaces, formatOnSave, checkForUpdates,
+        });
+        onClose();
+    };
+
+    return (
+        <div className="modal-overlay" onClick={onClose}>
+            <div
+                className="s-modal"
+                onClick={(e) => e.stopPropagation()}
+                onKeyDown={(e) => e.key === 'Escape' && onClose()}
+            >
+                {/* Sidebar */}
+                <nav className="s-sidebar">
+                    <h2 className="s-sidebar-title">Settings</h2>
+                    {TABS.map(t => (
+                        <button
+                            key={t.key}
+                            className={`s-nav-item ${activeTab === t.key ? 'active' : ''}`}
+                            onClick={() => setActiveTab(t.key)}
+                        >
+                            {t.label}
+                        </button>
+                    ))}
+                </nav>
+
+                {/* Content */}
+                <div className="s-content">
+                    <div className="s-content-scroll">
+                        {activeTab === 'editor' && (
+                            <>
+                                <SectionHeader title="Appearance" />
+                                <SegmentedRow label="Theme" value={theme} onChange={(v) => setTheme(v as 'light' | 'dark' | 'system')}
+                                    options={[
+                                        { value: 'light', label: 'Light' },
+                                        { value: 'dark', label: 'Dark' },
+                                        { value: 'system', label: 'System' },
+                                    ]} />
+                                <SelectRow label="UI font" hint="Space Grotesk is the ZITEXT default"
+                                    value={uiFont} onChange={setUiFont} options={UI_FONTS} />
+                                <SelectRow label="Code font" value={fontFamily} onChange={setFontFamily} options={FONT_FAMILIES} />
+                                <SliderRow label="Font size" value={fontSize} onChange={setFontSize} min={MIN_FONT_SIZE} max={MAX_FONT_SIZE} />
+
+                                <SectionHeader title="Indentation" />
+                                <SelectRow label="Tab Size" value={tabSize} onChange={(v) => setTabSize(parseInt(v))}
+                                    options={[{ value: 2, label: '2 spaces' }, { value: 4, label: '4 spaces' }, { value: 8, label: '8 spaces' }]} />
+                                <Toggle label="Insert Spaces" description="Use spaces instead of tab characters" checked={insertSpaces} onChange={setInsertSpaces} />
+
+                                <SectionHeader title="Display" />
+                                <Toggle label="Word Wrap" checked={wordWrap} onChange={setWordWrap} />
+                                <Toggle label="Minimap" checked={showMinimap} onChange={setShowMinimap} />
+                                <Toggle label="Column Selection" description="Alt+Shift+Drag for block selection" checked={enableColumnSelection} onChange={setEnableColumnSelection} />
+                            </>
+                        )}
+
+                        {activeTab === 'files' && (
+                            <>
+                                <SectionHeader title="Saving" />
+                                <SelectRow label="Autosave" value={autosave} onChange={(v) => setAutosave(v as 'off' | 'afterDelay' | 'onFocusChange')}
+                                    options={[{ value: 'off', label: 'Off' }, { value: 'afterDelay', label: 'After Delay' }, { value: 'onFocusChange', label: 'On Focus Change' }]} />
+                                {autosave === 'afterDelay' && (
+                                    <NumberRow label="Delay (ms)" value={autosaveDelay} onChange={setAutosaveDelay} min={500} max={10000} step={500} />
+                                )}
+                                <Toggle label="Format on Save" description="Format JSON, XML, YAML, HTML, CSS, JavaScript and TypeScript files when saving (not read-only or new, unsaved documents)" checked={formatOnSave} onChange={setFormatOnSave} />
+
+                                <SectionHeader title="Defaults" />
+                                <InfoBlock>
+                                    <p>Encoding: <strong>UTF-8</strong></p>
+                                    <p>Line Ending: <strong>LF (Unix)</strong></p>
+                                </InfoBlock>
+                            </>
+                        )}
+
+                        {activeTab === 'privacy' && (
+                            <>
+                                <SectionHeader title="Updates" />
+                                <Toggle label="Check for updates" description="Checks zitext.com once per session. No personal data is sent." checked={checkForUpdates} onChange={setCheckForUpdates} />
+
+                                <SectionHeader title="Data Handling" />
+                                <InfoBlock>
+                                    <p>ZITEXT does not collect telemetry, usage data, or crash reports.</p>
+                                    <p>All files remain on your machine. No file content is ever sent to any server.</p>
+                                    <p>The only network request is the optional update check above.</p>
+                                </InfoBlock>
+                            </>
+                        )}
+
+                        {activeTab === 'advanced' && (
+                            <>
+                                <SectionHeader title="Limits" />
+                                <InfoBlock>
+                                    <p>Large file warning: <strong>1 MB</strong></p>
+                                    <p>Maximum file size: <strong>10 MB</strong></p>
+                                    <p>File watcher interval: <strong>2 seconds</strong></p>
+                                </InfoBlock>
+
+                                <SectionHeader title="Shortcuts" />
+                                <InfoBlock>
+                                    <p>Customize keyboard shortcuts via <strong>Settings &rarr; Keyboard Shortcuts</strong></p>
+                                </InfoBlock>
+
+                                <SectionHeader title="About" />
+                                <InfoBlock>
+                                    <p><strong>ZITEXT Editor</strong></p>
+                                    <p>A modern, lightweight text editor</p>
+                                </InfoBlock>
+                            </>
+                        )}
+                    </div>
+
+                    {/* Footer */}
+                    <div className="s-footer">
+                        <button className="s-btn s-btn-cancel" onClick={onClose}>Cancel</button>
+                        <button className="s-btn s-btn-save" onClick={handleSave}>Save Changes</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}

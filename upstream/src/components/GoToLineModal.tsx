@@ -1,0 +1,85 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { parseLineAndColumn } from '../utils/lineColumn';
+import { errorService } from '../services/ErrorService';
+
+interface GoToLineModalProps {
+    isOpen: boolean;
+    onClose: () => void;
+    onGoToLine: (lineNumber: number, column: number) => void;
+    maxLine: number;
+}
+
+export function GoToLineModal({ isOpen, onClose, onGoToLine, maxLine }: GoToLineModalProps) {
+    const [lineNumber, setLineNumber] = useState('');
+    const inputRef = useRef<HTMLInputElement>(null);
+
+    useEffect(() => {
+        if (isOpen && inputRef.current) {
+            inputRef.current.focus();
+            inputRef.current.select();
+        }
+    }, [isOpen]);
+
+    if (!isOpen) return null;
+
+    const handleSubmit = (e: React.FormEvent) => {
+        e.preventDefault();
+        const target = parseLineAndColumn(lineNumber);
+        const effectiveMax = Math.max(maxLine, 1); // treat empty file as 1 line
+        if (target && target.line > 0 && target.line <= effectiveMax) {
+            onGoToLine(target.line, target.column);
+            onClose();
+        } else {
+            errorService.showWarning(`Please enter a line number between 1 and ${effectiveMax}`);
+        }
+    };
+
+    const handleKeyDown = (e: React.KeyboardEvent) => {
+        if (e.key === 'Escape') {
+            onClose();
+        }
+    };
+
+    return (
+        <div className="modal-overlay" onClick={onClose}>
+            <div className="modal" onClick={(e) => e.stopPropagation()} onKeyDown={handleKeyDown}>
+                <div className="modal-header">
+                    <h3>Go to Line</h3>
+                    <button className="modal-close" onClick={onClose} aria-label="Close">×</button>
+                </div>
+                {/* noValidate: rely on handleSubmit's JS range check + in-app warning
+                    toast instead of native HTML5 constraint validation. WebKitGTK
+                    (Linux) renders the native validation bubble empty, and it also
+                    blocks submit so our own message never showed. */}
+                <form noValidate onSubmit={handleSubmit}>
+                    <div className="modal-body">
+                        {/* The range sits inside the field as a trailing hint rather
+                            than in the placeholder, so it stays visible while typing. */}
+                        <div className="modal-input-wrap">
+                            <input
+                                ref={inputRef}
+                                type="text"
+                                inputMode="numeric"
+                                className="modal-input modal-input-bare"
+                                aria-label={`Line number, 1 to ${Math.max(maxLine, 1)}, optionally followed by :column`}
+                                value={lineNumber}
+                                onChange={(e) => setLineNumber(e.target.value.replace(/[^0-9:,]/g, ''))}
+                            />
+                            <span className="modal-input-hint" aria-hidden="true">
+                                1 – {Math.max(maxLine, 1).toLocaleString()}
+                            </span>
+                        </div>
+                    </div>
+                    <div className="modal-footer">
+                        <button type="button" className="modal-button" onClick={onClose}>
+                            Cancel
+                        </button>
+                        <button type="submit" className="modal-button primary">
+                            Go
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    );
+}

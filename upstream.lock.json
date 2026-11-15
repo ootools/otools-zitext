@@ -1,0 +1,12 @@
+{
+  "repo": "zitrino-oss/zitext-editor",
+  "url": "https://github.com/zitrino-oss/zitext-editor.git",
+  "subpath": "(frontend whitelist)",
+  "ref": "main",
+  "commit": "2a11efcb22be0585bccc6a037e6f9f7228b4a441",
+  "commitDate": "2026-11-14T15:58:28+05:30",
+  "fetchedAt": "2026-11-15T16:01:46.167Z",
+  "fileCount": 217,
+  "treeHash": "24798ba217bb985bbfb663246408fb94fd919d68abe1b5de6fef62d5caaaedf4",
+  "note": "upstream/ 是锁定提交下前端白名单路径的原样快照，不要就地修改；移植改动放 shell/。"
+}
