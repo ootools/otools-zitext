@@ -24,11 +24,30 @@ test('HTTP and application errors fail rather than claiming publication success'
   await assert.rejects(publishMarket('https://api.test/publish','xy_pat_test',{},async()=>response({},false)));
   await assert.rejects(publishMarket('https://api.test/publish','xy_pat_test',{},async()=>response({error:'unexpected'})));
 });
-test('market payload uses actual packageUrl and a renderable raw logo field',()=>{
-  const p=marketPayload({packid:'plugin-a',uuid:'plugin-a',version:'1.0.0',displayName:'A',entry:'dist/index.html'},'owner/repo','v1.0.0','1.0.0');
+test('combined market payload keeps packageUrl and reports packageMode=0',()=>{
+  const p=marketPayload({packid:'plugin-a',uuid:'plugin-a',version:'1.0.0',displayName:'A',entry:'dist/index.html',minOtoolsVersion:'0.9.0'},'owner/repo','v1.0.0','1.0.0');
   assert.equal(p.packageUrl,'https://github.com/owner/repo/releases/download/v1.0.0/plugin-a-1.0.0.oplg');
+  assert.equal(p.packageMode,0);
   // logo 必须走 raw.githubusercontent.com：Release 资产链是 octet-stream+attachment，<img> 拒载
   assert.equal(p.logo,'https://raw.githubusercontent.com/owner/repo/v1.0.0/logo.svg');
+  // 市场接口用 minOToolsVersion；小写别名必须删掉，否则 serde 会当重复字段
+  assert.equal(p.minOToolsVersion,'0.9.0');
+  assert.equal(p.minOtoolsVersion,undefined);
+  // 平台可见性：纯 webview 插件在三个 OS 上都可用
+  assert.equal(p.supportWindows,true);
+  assert.equal(p.supportMacos,true);
+  assert.equal(p.supportLinux,true);
+});
+test('six-platform payload exposes one URL per OS/arch and packageMode=1',()=>{
+  const p=marketPayload({packid:'plugin-a',uuid:'plugin-a',version:'1.0.0',displayName:'A',entry:'dist/index.html',minOtoolsVersion:'0.9.0'},'owner/repo','v1.0.0','1.0.0',{platformPackages:true});
+  const base='https://github.com/owner/repo/releases/download/v1.0.0/plugin-a-1.0.0';
+  assert.equal(p.packageUrl,undefined);
+  assert.equal(p.packageMode,1);
+  assert.equal(p.minOToolsVersion,'0.9.0');
+  assert.deepEqual(
+    ['packageUrlMacos','packageUrlMacosIntel','packageUrlWindows','packageUrlWindowsArm','packageUrlLinux','packageUrlLinuxArm'].map((field)=>p[field]),
+    [`${base}-macos.oplg`,`${base}-macos-intel.oplg`,`${base}-windows.oplg`,`${base}-windows-arm.oplg`,`${base}-linux.oplg`,`${base}-linux-arm.oplg`],
+  );
 });
 test('version inputs cannot inject shell or publish a mismatched tag',()=>{
   assert.throws(()=>releaseMeta({packid:'a',version:'1.0.0'},'1.0.0; echo bad',''));

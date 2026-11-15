@@ -75,7 +75,9 @@ jobs:
       - name: 打包正式插件并生成摘要
         env:
           VERSION: ${{ steps.meta.outputs.version }}
-        run: node scripts/pack-plugin.mjs --out dist-pack --version "$VERSION"
+        # 六平台分包：产出 -macos / -macos-intel / -windows / -windows-arm /
+        # -linux / -linux-arm 六个 .oplg，市场侧 packageMode=1。
+        run: node scripts/pack-plugin.mjs --out dist-pack --version "$VERSION" --mode platform
       - name: 独立验证插件包
         run: node scripts/verify-plugin.mjs dist-pack
       - uses: actions/upload-artifact@v4
@@ -164,6 +166,8 @@ jobs:
           RELEASE_TAG: ${{ needs.build.outputs.release_tag }}
           RELEASE_VERSION: ${{ needs.build.outputs.version }}
           PLUGIN_MANIFEST: release-assets/plugin.json
+          # 与 pack-plugin.mjs --mode platform 对应：上报 6 个 packageUrl* 并置 packageMode=1。
+          PLATFORM_PACKAGES: "true"
         run: node scripts/publish-market.mjs
       - name: 发布摘要
         env:

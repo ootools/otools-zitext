@@ -12,7 +12,12 @@
  *   - 用 `productionManifest` 去掉开发期配置（devUrl / quickDev），
  *     否则 OTools 的正式包校验会以「正式包不能启用开发模式」拒收。
  *
- * 用法：node scripts/pack-plugin.mjs [--out dist-pack] [--version 0.1.0]
+ * 发布形态默认走六平台分包（packageMode=1）：按 PLATFORM_TARGETS 产出
+ * `-macos` / `-macos-intel` / `-windows` / `-windows-arm` / `-linux` / `-linux-arm`
+ * 六个 `.oplg`。纯 webview 插件的六个包内容相同，只压一次 ZIP 再写六份；
+ * `--mode combined` 可退回单个合包，便于本地安装和排查。
+ *
+ * 用法：node scripts/pack-plugin.mjs [--out dist-pack] [--version 0.1.0] [--mode platform|combined]
  */
 import { deflateRawSync, crc32 } from 'node:zlib';
 import fs from 'node:fs';
@@ -20,6 +25,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { PLATFORM_TARGETS, expectedPackageNames } from './platform-packages.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -132,8 +138,16 @@ function main() {
   const manifest = productionManifest(source, arg('version', source.version));
   const { version, packid } = manifest;
 
-  const outDir = path.join(root, arg('out', 'dist-pack'));
+  const mode = arg('mode', 'platform');
+  if (!['platform', 'combined'].includes(mode)) throw new Error(`--mode 只能是 platform 或 combined：${mode}`);
+  const platformPackages = mode === 'platform';
+
+  const outDir = path.resolve(root, arg('out', 'dist-pack'));
   fs.mkdirSync(outDir, { recursive: true });
+  // 清掉上一次的 .oplg，避免旧版本或旧模式的文件混进发布目录
+  for (const name of fs.readdirSync(outDir)) {
+    if (name.endsWith('.oplg')) fs.rmSync(path.join(outDir, name), { force: true });
+  }
 
   // 1) 包内 plugin.json（生产清单，版本号与文件名一致）
   const entries = [{ name: 'plugin.json', data: Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`, 'utf8') }];
@@ -166,20 +180,29 @@ function main() {
     throw new Error('插件根目录必须提供 logo.svg');
   }
 
-  const output = path.join(outDir, `${packid}-${version}.oplg`);
-  fs.writeFileSync(output, zip(entries));
+  // 纯 webview 插件没有平台相关资源：六个分包内容完全一致，只压一次 ZIP。
+  const archive = zip(entries);
+  const names = expectedPackageNames(packid, version, platformPackages);
+  for (const name of names) fs.writeFileSync(path.join(outDir, name), archive);
 
-  // 发布目录统一扁平结构：oplg + plugin.json + logo.svg + 摘要 + 元信息
+  // 发布目录统一扁平结构：oplg × N + plugin.json + logo.svg + 摘要 + 元信息
   fs.writeFileSync(path.join(outDir, 'plugin.json'), entries[0].data);
   fs.copyFileSync(path.join(root, 'logo.svg'), path.join(outDir, 'logo.svg'));
-  const releaseFiles = [path.basename(output), 'plugin.json', 'logo.svg'];
+  const releaseFiles = [...names, 'plugin.json', 'logo.svg'];
   const sums = releaseFiles.map((name) => `${createHash('sha256').update(fs.readFileSync(path.join(outDir, name))).digest('hex')}  ${name}`);
   fs.writeFileSync(path.join(outDir, 'SHA256SUMS'), `${sums.join('\n')}\n`);
   const meta = {
     packid,
     uuid: manifest.uuid,
     version,
-    output,
+    packageMode: platformPackages ? 1 : 0,
+    packages: names.map((name, index) => ({
+      name,
+      platform: platformPackages ? PLATFORM_TARGETS[index].platform : 'any',
+      arch: platformPackages ? PLATFORM_TARGETS[index].arch : 'any',
+      suffix: platformPackages ? PLATFORM_TARGETS[index].suffix : '',
+    })),
+    output: path.join(outDir, names[0]),
     entries: entries.length,
     totalBytes: entries.reduce((sum, item) => sum + item.data.length, 0),
     nativeLibs: entries.map((item) => item.name).filter((name) => name.startsWith('lib/')),

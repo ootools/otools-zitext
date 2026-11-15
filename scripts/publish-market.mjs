@@ -1,6 +1,7 @@
 /** 独立插件发布：显式选择认证方式，秘密仅在当前进程使用，不写入 artifact/job outputs。 */
 import fs from 'node:fs';
 import { pathToFileURL } from 'node:url';
+import { PLATFORM_TARGETS, combinedPackageName, platformPackageName } from './platform-packages.mjs';
 
 function httpsUrl(value) {
   const url = new URL(value);
@@ -81,7 +82,7 @@ export function validateAuthConfig(mode,env) {
   } else throw new Error('未知发布认证方式');
   if (env.OTOOLS_MARKET_API) httpsUrl(env.OTOOLS_MARKET_API);
 }
-export function marketPayload(manifest,repo,tag,version) {
+export function marketPayload(manifest,repo,tag,version,extras={}) {
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo || '')) throw new Error('GitHub 仓库名称无效');
   const base=`https://github.com/${repo}/releases/download/${encodeURIComponent(tag)}`;
   // logo 不能用 Release 资产下载链：GitHub 会 302 到
@@ -90,7 +91,28 @@ export function marketPayload(manifest,repo,tag,version) {
   // 改用 raw.githubusercontent.com 上同一 tag 的仓库文件：返回 image/svg+xml，
   // 可直接渲染，且随 tag 固定不会漂移。
   const logo=`https://raw.githubusercontent.com/${repo}/${encodeURIComponent(tag)}/logo.svg`;
-  return {...productionManifest(manifest,version),packageUrl:`${base}/${manifest.packid}-${version}.oplg`,logo};
+  const payload={...productionManifest(manifest,version),logo,
+    supportWindows:true,supportMacos:true,supportLinux:true,
+  };
+  // 宿主两种写法都认（serde alias），但同时出现会被当成重复字段；
+  // 统一成市场接口用的 minOToolsVersion，并删掉 plugin.json 里的小写键。
+  const minVersion=String(manifest.minOToolsVersion || manifest.minOtoolsVersion || '').trim();
+  delete payload.minOtoolsVersion;
+  if (minVersion) payload.minOToolsVersion=minVersion;
+
+  if (extras.platformPackages) {
+    // 六平台分包：每个平台/架构一个包，客户端优先下载平台包，失败回退合包。
+    payload.packageMode=1;
+    delete payload.packageUrl;
+    for (const target of PLATFORM_TARGETS) {
+      payload[target.field]=`${base}/${platformPackageName(manifest.packid,version,target.suffix)}`;
+    }
+  } else {
+    // 单合包：显式上报 packageMode=0，清除市场库里可能残留的分包模式。
+    payload.packageMode=0;
+    payload.packageUrl=`${base}/${combinedPackageName(manifest.packid,version)}`;
+  }
+  return payload;
 }
 export async function publishMarket(url,access,payload,fetcher=fetch) {
   const result=await jsonRequest(fetcher,url,{method:'POST',headers:{Authorization:`Bearer ${token(access)}`,'Content-Type':'application/json'},body:JSON.stringify(payload)});
@@ -113,7 +135,8 @@ async function main() {
   validateAuthConfig(env.AUTH_MODE,env);
   const access=await credential(env.AUTH_MODE,env);
   await publishMarket(env.OTOOLS_MARKET_API || 'https://otools-api.lingyun.net/api/v1/otools/plugin/publish',access,
-    marketPayload(manifest,env.GITHUB_REPOSITORY,env.RELEASE_TAG,env.RELEASE_VERSION));
+    marketPayload(manifest,env.GITHUB_REPOSITORY,env.RELEASE_TAG,env.RELEASE_VERSION,
+      {platformPackages:booleanInput(env.PLATFORM_PACKAGES,true)}));
   console.log('插件市场已确认发布成功');
 }
 if (process.argv[1] && import.meta.url===pathToFileURL(process.argv[1]).href) {

@@ -66,9 +66,28 @@ npm run pack                        # 产出 dist-pack/*.oplg 并校验
 ## 发布
 
 推送 `v<版本>` 标签触发 `.github/workflows/release-plugin.yml`：校验版本与标签、
-回归测试、上游快照校验、构建、打 `.oplg`、独立校验、创建 GitHub Release。
+上游快照校验、回归测试、TypeScript 检查、构建、六平台分包、独立校验、创建 GitHub Release。
 需要同步插件市场时，在 workflow_dispatch 里带 `publish_market=true`（或配置仓库变量
 `OTOOLS_PUBLISH_MARKET=true`，push tag 场景生效），并配置 `XYCLOUD_PAT` 等凭证。
+
+### 六平台分包
+
+`node scripts/pack-plugin.mjs --mode platform`（默认）按 6 个系统/架构出包，
+`meta.json` 记 `packageMode=1`；市场 payload 相应上报 6 个 `packageUrl*` 字段，
+宿主按当前平台优先下载平台包、失败回退合包：
+
+| 后缀 | 平台 | 架构 | 市场字段 |
+| --- | --- | --- | --- |
+| `macos` | macOS | arm64 | `packageUrlMacos` |
+| `macos-intel` | macOS | x64 | `packageUrlMacosIntel` |
+| `windows` | Windows | x64 | `packageUrlWindows` |
+| `windows-arm` | Windows | arm64 | `packageUrlWindowsArm` |
+| `linux` | Linux | x64 | `packageUrlLinux` |
+| `linux-arm` | Linux | arm64 | `packageUrlLinuxArm` |
+
+本插件是纯 webview、没有 native cdylib，六个包内容完全相同（只有文件名不同），
+所以发布目录会比单合包多占约 5 倍空间。需要单个合包时用
+`node scripts/pack-plugin.mjs --mode combined`，对应 `packageMode=0`。
 
 `publish-market.mjs` 的 `releaseMeta()` 强校验 `tag === "v" + plugin.json.version`，
 改版本时 `plugin.json` 与 `package.json` 要一起改。

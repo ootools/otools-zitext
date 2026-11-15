@@ -37,7 +37,7 @@ const status = spawnSync(process.execPath, vitestArgs, {
 if (status !== 0) process.exit(status);
 
 console.log('\n$ node --test scripts/*.test.mjs');
-const unit = spawnSync(process.execPath, ['--test', 'scripts/publish-market.test.mjs', 'scripts/release-policy.test.mjs'], {
+const unit = spawnSync(process.execPath, ['--test', 'scripts/platform-packages.test.mjs', 'scripts/publish-market.test.mjs', 'scripts/release-policy.test.mjs'], {
     cwd: process.cwd(), stdio: 'inherit',
 }).status ?? 1;
 process.exit(unit);
