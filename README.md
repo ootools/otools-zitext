@@ -46,6 +46,10 @@ dist/                构建产物（提交进仓库，方便子模块直接安�
 再跑一次 `vite build` 输出到 `dist/`。上游快照永远不落地修改，升级上游只需
 `node scripts/sync-upstream.mjs --ref <tag>` 后重跑构建测试。
 
+`vendor/otools-plugin-sdk` 是宿主 SDK 的白名单快照（只有 `dist/` 与合规文件），
+同样有内容哈希锁定：升级宿主 SDK 用 `npm run sync-sdk -- --from <宿主仓库的
+vendor/otools-plugin-sdk>`，CI 会跑 `npm run check-sdk` 拦就地修改。
+
 ## 宿主桥接约定
 
 插件是纯 webview（`meta.json` 里 `nativeLibs: []`），所有能力都经 `shell/shim/host.ts`
@@ -70,7 +74,8 @@ dist/                构建产物（提交进仓库，方便子模块直接安�
 
 ```bash
 npm install --legacy-peer-deps
-node scripts/check-upstream.mjs     # 校验上游快照没被就地改过
+npm run check-upstream            # 校验上游快照没被就地改过
+npm run check-sdk                 # 校验 vendor 里的宿主 SDK 没被就地改过
 npm test                            # 移植层 + 发布脚本单测
 npm run typecheck                   # 上游源码 + 移植层 TS 检查
 npm run build                       # 合成 .build/ + vite build → dist/

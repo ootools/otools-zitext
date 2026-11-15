@@ -11,6 +11,8 @@
   "scripts": {
     "sync-upstream": "node scripts/sync-upstream.mjs",
     "check-upstream": "node scripts/sync-upstream.mjs --check",
+    "sync-sdk": "node scripts/sync-sdk.mjs",
+    "check-sdk": "node scripts/sync-sdk.mjs --check",
     "build": "node scripts/build.mjs",
     "tree": "node scripts/build.mjs --tree",
     "dev": "node scripts/dev.mjs",
