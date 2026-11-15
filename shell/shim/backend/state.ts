@@ -7,7 +7,7 @@
  * dialogs go through the OTools host so the user always picks real paths.
  */
 import { emit } from '../event';
-import { getBackend } from '../host';
+import { getBackend, hostLog, isHostRuntime } from '../host';
 import { kvGet, kvHas, kvSet } from '../util';
 
 const DEFAULT_SETTINGS = {
@@ -105,18 +105,37 @@ export async function appendCrashLog(args: Record<string, unknown>): Promise<voi
 export async function requestMenuAction(args: Record<string, unknown>): Promise<void> {
     const action = String(args.action ?? '');
     const backend = getBackend();
+    hostLog(`request_menu_action=${action} backend=${isHostRuntime() ? 'host' : 'browser'}`
+        + ` otools=${Boolean((window as any).otools)} tauri=${Boolean((window as any).__TAURI_INTERNALS__)}`);
     let result: string | null = null;
     if (action === 'open') {
-        result = await backend.pickFile();
+        result = await pickOrReport(() => backend.pickFile(), '打开文件');
         await emit('open-from-dialog', result);
     } else if (action === 'open_folder') {
-        result = await backend.pickFolder();
+        result = await pickOrReport(() => backend.pickFolder(), '打开文件夹');
         await emit('folder-from-dialog', result);
     } else if (action === 'save_as') {
-        result = await backend.pickSave(String(args.defaultName ?? ''));
+        result = await pickOrReport(() => backend.pickSave(String(args.defaultName ?? '')), '另存为');
         await emit('save-from-dialog', result);
     } else {
         throw new Error(`Unknown menu action: ${action}`);
+    }
+}
+
+/**
+ * A picker that throws must never look like "nothing happened": the upstream
+ * UI only sees `null` (user cancelled) and would silently stay unchanged.
+ */
+async function pickOrReport(pick: () => Promise<string | null>, label: string): Promise<string | null> {
+    try {
+        return await pick();
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`[zitext] ${label}失败`, error);
+        try {
+            await getBackend().message(`${label}失败：${message}`, { title: 'ZITEXT', kind: 'error' });
+        } catch { /* reporting is best effort */ }
+        return null;
     }
 }
 

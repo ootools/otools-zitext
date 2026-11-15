@@ -77,6 +77,48 @@ function normalizeDialogPath(value: unknown): string | null {
     return null;
 }
 
+/**
+ * App-level command bridge (`tools_webview_*`, `otools_*`).
+ *
+ * `window.otools.invokeNative()` is **not** this: it forwards to the plugin's
+ * own native cdylib (`.oplg` `lib/*`), so on a pure-webview plugin every call
+ * rejects. Tauri app commands live on `__TAURI_INTERNALS__.invoke`, which the
+ * host also mirrors on ancestors when a plugin page is framed.
+ */
+async function hostCommand<T = unknown>(command: string, args: Record<string, unknown> = {}): Promise<T> {
+    const candidates: Array<{ __TAURI_INTERNALS__?: { invoke<T>(cmd: string, payload?: Record<string, unknown>): Promise<T> } }> = [win()];
+    for (const resolver of [() => win().parent, () => win().top]) {
+        try {
+            const candidate = resolver() as typeof candidates[number] | null;
+            if (candidate && candidate !== win() && !candidates.includes(candidate)) candidates.push(candidate);
+        } catch { /* cross-origin ancestor: ignore */ }
+    }
+    for (const candidate of candidates) {
+        const invoke = candidate?.__TAURI_INTERNALS__?.invoke;
+        if (typeof invoke === 'function') {
+            return candidate.__TAURI_INTERNALS__!.invoke<T>(command, args);
+        }
+    }
+    throw new Error(`宿主命令通道不可用：${command}`);
+}
+
+/** Diagnostics land in `~/.otools/log/core/webview.log` via the host logger. */
+export function hostLog(message: string): void {
+    try { console.debug('[zitext]', message); } catch { /* ignore */ }
+    void hostCommand('tools_webview_log', { message: `[zitext] ${message}` }).catch(() => {});
+}
+
+/** Runs a host picker command; `undefined` means "unavailable", `null` = cancelled. */
+async function runPickerCommand<T>(command: string, args: Record<string, unknown>): Promise<T | null | undefined> {
+    try {
+        const result = await hostCommand<T | null>(command, args);
+        return result ?? null;
+    } catch (error) {
+        hostLog(`${command} 不可用：${error instanceof Error ? error.message : String(error)}`);
+        return undefined;
+    }
+}
+
 /** Real OTools host. All FS access goes through the documented host API. */
 function otoolsBackend(): HostBackend {
     const readFile = async (path: string): Promise<HostFile | null> => {
@@ -115,6 +157,31 @@ function otoolsBackend(): HostBackend {
 
     const dialog = () => api()?.dialog ?? api()?.runtime?.dialog;
 
+    /**
+     * Documented `window.otools.dialog` path. Only reached when the host picker
+     * command is unavailable (very old host); it is the fallback, not the
+     * primary route, because the host may answer `null` for both "cancelled"
+     * and "could not show a dialog".
+     */
+    const pickViaDialogApi = async (kind: 'file' | 'folder' | 'save', defaultName = ''): Promise<string | null> => {
+        const d = dialog();
+        try {
+            if (kind === 'save') {
+                if (!d?.save) return null;
+                return normalizeDialogPath(await d.save({ defaultPath: defaultName, title: '另存为' }));
+            }
+            if (!d?.open) return null;
+            const result = await d.open(kind === 'folder'
+                ? { directory: true, multiple: false, title: '打开文件夹' }
+                : { multiple: false, title: '打开文件' });
+            if (Array.isArray(result)) return normalizeDialogPath(result[0]);
+            return normalizeDialogPath(result);
+        } catch (error) {
+            hostLog(`dialog.${kind} 失败：${error instanceof Error ? error.message : String(error)}`);
+            return null;
+        }
+    };
+
     return {
         readFile,
         listDir,
@@ -124,28 +191,17 @@ function otoolsBackend(): HostBackend {
             await host.writeHostFile({ path, dataBase64: encodeBase64(bytes) });
         },
         async removeFile(path) {
-            const host = api();
             try {
-                if (typeof host?.invokeNative === 'function') await host.invokeNative('tools_webview_remove_entry', { path, recursive: false });
-                else if (win().__TAURI_INTERNALS__?.invoke) await win().__TAURI_INTERNALS__!.invoke('tools_webview_remove_entry', { path, recursive: false });
-            } catch { /* best effort */ }
+                await hostCommand('tools_webview_remove_entry', { path, recursive: false });
+            } catch (error) {
+                hostLog(`删除失败：${path} ${error instanceof Error ? error.message : String(error)}`);
+            }
         },
         async rename(from, to) {
-            const host = api();
-            const call = async () => {
-                if (typeof host?.invokeNative === 'function') {
-                    await host.invokeNative('tools_webview_rename_entry', { request: { from, to } });
-                    return;
-                }
-                if (win().__TAURI_INTERNALS__?.invoke) {
-                    await win().__TAURI_INTERNALS__!.invoke('tools_webview_rename_entry', { request: { from, to } });
-                    return;
-                }
-                throw new Error('rename unavailable');
-            };
             try {
-                await call();
-            } catch {
+                await hostCommand('tools_webview_rename_entry', { request: { from, to } });
+            } catch (error) {
+                hostLog(`重命名命令不可用，改用读写删除：${error instanceof Error ? error.message : String(error)}`);
                 // Older hosts have no rename command: emulate with read + write + remove.
                 const file = await readFile(from);
                 if (!file) throw new Error('源文件不存在');
@@ -154,21 +210,29 @@ function otoolsBackend(): HostBackend {
             }
         },
         async pickFile() {
-            const d = dialog();
-            const result = d?.open ? await d.open({ multiple: false, title: '打开文件' }) : null;
-            if (Array.isArray(result)) return normalizeDialogPath(result[0]);
-            return normalizeDialogPath(result);
+            // The host picker command is the primary path: one dialog, a definite
+            // result, and no dependence on the `plugin:dialog` capability set.
+            const files = await runPickerCommand<Array<{ path?: string }>>('tools_webview_pick_files', {
+                options: { multiple: false, title: '打开文件' },
+            });
+            if (files !== undefined) {
+                return Array.isArray(files) ? normalizeDialogPath(files[0]) : null;
+            }
+            return pickViaDialogApi('file');
         },
         async pickFolder() {
-            const d = dialog();
-            const result = d?.open ? await d.open({ directory: true, multiple: false, title: '打开文件夹' }) : null;
-            if (Array.isArray(result)) return normalizeDialogPath(result[0]);
-            return normalizeDialogPath(result);
+            const folder = await runPickerCommand<{ path?: string }>('tools_webview_pick_folder', {
+                options: { title: '打开文件夹' },
+            });
+            if (folder !== undefined) return normalizeDialogPath(folder);
+            return pickViaDialogApi('folder');
         },
         async pickSave(defaultName) {
-            const d = dialog();
-            const result = d?.save ? await d.save({ defaultPath: defaultName, title: '另存为' }) : null;
-            return normalizeDialogPath(result);
+            const meta = await runPickerCommand<{ path?: string }>('tools_webview_pick_save_path', {
+                options: { title: '另存为', suggestedName: defaultName || undefined },
+            });
+            if (meta !== undefined) return normalizeDialogPath(meta);
+            return pickViaDialogApi('save', defaultName);
         },
         async confirm(message, options) {
             const d = dialog();
@@ -206,22 +270,16 @@ function otoolsBackend(): HostBackend {
             }
         },
         async consumeOpenFiles() {
-            const host = api();
             const pluginUuid = win().__OToolsEnv?.pluginUuid
                 ?? new URLSearchParams(window.location.search).get('plugin')
                 ?? '';
             if (!pluginUuid) return [];
-            const payload = { pluginUuid };
             try {
-                if (typeof host?.invokeNative === 'function') {
-                    const result = await host.invokeNative('otools_consume_open_files', payload);
-                    if (Array.isArray(result)) return result.map(String);
-                }
-                if (win().__TAURI_INTERNALS__?.invoke) {
-                    const result = await win().__TAURI_INTERNALS__!.invoke('otools_consume_open_files', payload);
-                    if (Array.isArray(result)) return result.map(String);
-                }
-            } catch { /* queue is host-owned; not fatal */ }
+                const result = await hostCommand('otools_consume_open_files', { pluginUuid });
+                if (Array.isArray(result)) return result.map(String);
+            } catch (error) {
+                hostLog(`读取待打开文件失败：${error instanceof Error ? error.message : String(error)}`);
+            }
             return [];
         },
     };
@@ -333,10 +391,14 @@ function browserBackend(): HostBackend {
 
 let cached: HostBackend | null = null;
 
+/** True when a host bridge object exists (dialogs + host FS commands). */
+const hasHostBridge = (): boolean =>
+    Boolean(api() && (typeof api()!.readHostFile === 'function' || typeof win().__TAURI_INTERNALS__?.invoke === 'function'));
+
 export function getBackend(): HostBackend {
     if (cached) return cached;
     if (win().__ZITEXT_HOST_BACKEND__) cached = win().__ZITEXT_HOST_BACKEND__!;
-    else if (api() && typeof api()!.readHostFile === 'function') cached = otoolsBackend();
+    else if (hasHostBridge()) cached = otoolsBackend();
     else cached = browserBackend();
     return cached;
 }
@@ -347,4 +409,4 @@ export function setBackend(backend: HostBackend | null): void {
     if (backend) win().__ZITEXT_HOST_BACKEND__ = backend;
 }
 
-export const isHostRuntime = (): boolean => Boolean(api() && typeof api()!.readHostFile === 'function');
+export const isHostRuntime = hasHostBridge;

@@ -45,6 +45,23 @@ dist/                构建产物（提交进仓库，方便子模块直接安�
 再跑一次 `vite build` 输出到 `dist/`。上游快照永远不落地修改，升级上游只需
 `node scripts/sync-upstream.mjs --ref <tag>` 后重跑构建测试。
 
+## 宿主桥接约定
+
+插件是纯 webview（`meta.json` 里 `nativeLibs: []`），所有能力都经 `shell/shim/host.ts`
+的 `HostBackend` 走宿主。三条约定写在这里，避免重复踩坑：
+
+1. **应用命令走 `__TAURI_INTERNALS__.invoke`，不要用 `window.otools.invokeNative()`。**
+   后者是**原生 cdylib**（`.oplg` 里的 `lib/*.dylib`）的桥，纯 webview 插件调用必然
+   被拒（`native disabled`）。`tools_webview_*` / `otools_*` 这类宿主命令只认
+   `__TAURI_INTERNALS__.invoke`，页面被框架嵌套时宿主会把它同时挂到祖先窗口上。
+2. **选择器优先用宿主命令**：`tools_webview_pick_folder` / `tools_webview_pick_files` /
+   `tools_webview_pick_save_path`。它们只有一个对话框、返回确定的 `{path}` 或 `null`（取消）。
+   `window.otools.dialog.open()` 只作为老宿主兜底——它对「用户取消」和「宿主弹不出原生框」
+   都返回 `null`，无法区分，容易表现成「点了没反应」。
+3. **失败必须可见**：`requestMenuAction` 用 `pickOrReport()` 包一层，选路径抛错时弹宿主
+   消息框；同时通过 `hostLog()` 把 `[zitext] ...` 写进 `~/.otools/log/core/webview.log`，
+   现场排查看这个文件即可（含后端类型、`window.otools` / `__TAURI_INTERNALS__` 是否存在）。
+
 ## 本地开发
 
 ```bash

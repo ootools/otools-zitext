@@ -1,0 +1,1 @@
+import{t as e}from"./host-Cbu3cExT.js";var t=()=>e().readClipboard(),n=t=>e().writeClipboard(t);export{n,t};
