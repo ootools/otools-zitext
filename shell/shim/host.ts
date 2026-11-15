@@ -5,13 +5,18 @@
  * native dialogs, clipboard and app-level state. An OTools plugin is a plain
  * webview, so every one of those capabilities is routed through this layer:
  *
- *   1. `window.otools` (the OTools host bridge) — real host files/dialogs.
+ *   1. `window.otools` (the OTools host bridge) — real host files.
  *   2. `window.__ZITEXT_HOST_BACKEND__` — an injected test/preview backend.
  *   3. A localStorage-backed virtual filesystem — lets `npm run preview`
  *      render the whole editor in a normal browser without a host.
  *
+ * Pickers never use the OS-native dialog: on macOS that path flashes once and
+ * then refuses to open again, so `hostTree.ts` renders the chooser in-page.
+ *
  * The shim modules only ever talk to `getBackend()`, never to Tauri directly.
  */
+import { hostCommand, hostLog } from './hostCommand';
+import { pickHostFile, pickHostFolder, pickHostSavePath } from './hostTree';
 import { decodeBase64, encodeBase64 } from './util';
 
 export interface HostFile {
@@ -69,56 +74,6 @@ const api = (): Record<string, any> | undefined => win().otools ?? win().utools;
 
 const basename = (path: string): string => path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || path;
 
-function normalizeDialogPath(value: unknown): string | null {
-    if (typeof value === 'string') return value.trim() || null;
-    if (value && typeof value === 'object' && typeof (value as any).path === 'string') {
-        return String((value as any).path).trim() || null;
-    }
-    return null;
-}
-
-/**
- * App-level command bridge (`tools_webview_*`, `otools_*`).
- *
- * `window.otools.invokeNative()` is **not** this: it forwards to the plugin's
- * own native cdylib (`.oplg` `lib/*`), so on a pure-webview plugin every call
- * rejects. Tauri app commands live on `__TAURI_INTERNALS__.invoke`, which the
- * host also mirrors on ancestors when a plugin page is framed.
- */
-async function hostCommand<T = unknown>(command: string, args: Record<string, unknown> = {}): Promise<T> {
-    const candidates: Array<{ __TAURI_INTERNALS__?: { invoke<T>(cmd: string, payload?: Record<string, unknown>): Promise<T> } }> = [win()];
-    for (const resolver of [() => win().parent, () => win().top]) {
-        try {
-            const candidate = resolver() as typeof candidates[number] | null;
-            if (candidate && candidate !== win() && !candidates.includes(candidate)) candidates.push(candidate);
-        } catch { /* cross-origin ancestor: ignore */ }
-    }
-    for (const candidate of candidates) {
-        const invoke = candidate?.__TAURI_INTERNALS__?.invoke;
-        if (typeof invoke === 'function') {
-            return candidate.__TAURI_INTERNALS__!.invoke<T>(command, args);
-        }
-    }
-    throw new Error(`宿主命令通道不可用：${command}`);
-}
-
-/** Diagnostics land in `~/.otools/log/core/webview.log` via the host logger. */
-export function hostLog(message: string): void {
-    try { console.debug('[zitext]', message); } catch { /* ignore */ }
-    void hostCommand('tools_webview_log', { message: `[zitext] ${message}` }).catch(() => {});
-}
-
-/** Runs a host picker command; `undefined` means "unavailable", `null` = cancelled. */
-async function runPickerCommand<T>(command: string, args: Record<string, unknown>): Promise<T | null | undefined> {
-    try {
-        const result = await hostCommand<T | null>(command, args);
-        return result ?? null;
-    } catch (error) {
-        hostLog(`${command} 不可用：${error instanceof Error ? error.message : String(error)}`);
-        return undefined;
-    }
-}
-
 /** Real OTools host. All FS access goes through the documented host API. */
 function otoolsBackend(): HostBackend {
     const readFile = async (path: string): Promise<HostFile | null> => {
@@ -157,31 +112,6 @@ function otoolsBackend(): HostBackend {
 
     const dialog = () => api()?.dialog ?? api()?.runtime?.dialog;
 
-    /**
-     * Documented `window.otools.dialog` path. Only reached when the host picker
-     * command is unavailable (very old host); it is the fallback, not the
-     * primary route, because the host may answer `null` for both "cancelled"
-     * and "could not show a dialog".
-     */
-    const pickViaDialogApi = async (kind: 'file' | 'folder' | 'save', defaultName = ''): Promise<string | null> => {
-        const d = dialog();
-        try {
-            if (kind === 'save') {
-                if (!d?.save) return null;
-                return normalizeDialogPath(await d.save({ defaultPath: defaultName, title: '另存为' }));
-            }
-            if (!d?.open) return null;
-            const result = await d.open(kind === 'folder'
-                ? { directory: true, multiple: false, title: '打开文件夹' }
-                : { multiple: false, title: '打开文件' });
-            if (Array.isArray(result)) return normalizeDialogPath(result[0]);
-            return normalizeDialogPath(result);
-        } catch (error) {
-            hostLog(`dialog.${kind} 失败：${error instanceof Error ? error.message : String(error)}`);
-            return null;
-        }
-    };
-
     return {
         readFile,
         listDir,
@@ -210,29 +140,15 @@ function otoolsBackend(): HostBackend {
             }
         },
         async pickFile() {
-            // The host picker command is the primary path: one dialog, a definite
-            // result, and no dependence on the `plugin:dialog` capability set.
-            const files = await runPickerCommand<Array<{ path?: string }>>('tools_webview_pick_files', {
-                options: { multiple: false, title: '打开文件' },
-            });
-            if (files !== undefined) {
-                return Array.isArray(files) ? normalizeDialogPath(files[0]) : null;
-            }
-            return pickViaDialogApi('file');
+            // In-page chooser only (SDK `pickFromHostTree`): the OS dialog
+            // flashes once and then stops opening on macOS.
+            return pickHostFile('打开文件');
         },
         async pickFolder() {
-            const folder = await runPickerCommand<{ path?: string }>('tools_webview_pick_folder', {
-                options: { title: '打开文件夹' },
-            });
-            if (folder !== undefined) return normalizeDialogPath(folder);
-            return pickViaDialogApi('folder');
+            return pickHostFolder('打开文件夹');
         },
         async pickSave(defaultName) {
-            const meta = await runPickerCommand<{ path?: string }>('tools_webview_pick_save_path', {
-                options: { title: '另存为', suggestedName: defaultName || undefined },
-            });
-            if (meta !== undefined) return normalizeDialogPath(meta);
-            return pickViaDialogApi('save', defaultName);
+            return pickHostSavePath(defaultName);
         },
         async confirm(message, options) {
             const d = dialog();

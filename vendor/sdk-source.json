@@ -1,0 +1,7 @@
+{
+  "upstream": "https://github.com/ootools/otools-plugin-sdk",
+  "version": "0.1.0",
+  "source": "otools/otools vendor/otools-plugin-sdk (dist only, 与宿主内置版本同源)",
+  "note": "只拷贝 dist + package.json + LICENSE/README；用法 import { pickFromHostTree } from 'otools-plugin-sdk'。dist 里没有独立的 host-file-tree.js（被内联进 index.js），类型声明在 host-file-tree.d.ts。",
+  "entryPointsUsed": ["pickFromHostTree", "browseHostDir"]
+}

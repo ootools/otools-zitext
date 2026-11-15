@@ -37,6 +37,7 @@ shell/
   index.html         插件入口（相对路径资源 + OTools 标记）
   vite.config.ts     alias + base:'./'（宿主用 otools-plugin:// 加载）
 scripts/             合成构建树、构建、测试、打包、校验、发布、上游同步
+vendor/              宿主 SDK 的 dist 快照（otools-plugin-sdk，选目录用的 DOM 树）
 .github/workflows/    release-plugin.yml（tag v* 触发）
 dist/                构建产物（提交进仓库，方便子模块直接安装）
 ```
@@ -54,10 +55,13 @@ dist/                构建产物（提交进仓库，方便子模块直接安�
    后者是**原生 cdylib**（`.oplg` 里的 `lib/*.dylib`）的桥，纯 webview 插件调用必然
    被拒（`native disabled`）。`tools_webview_*` / `otools_*` 这类宿主命令只认
    `__TAURI_INTERNALS__.invoke`，页面被框架嵌套时宿主会把它同时挂到祖先窗口上。
-2. **选择器优先用宿主命令**：`tools_webview_pick_folder` / `tools_webview_pick_files` /
-   `tools_webview_pick_save_path`。它们只有一个对话框、返回确定的 `{path}` 或 `null`（取消）。
-   `window.otools.dialog.open()` 只作为老宿主兜底——它对「用户取消」和「宿主弹不出原生框」
-   都返回 `null`，无法区分，容易表现成「点了没反应」。
+2. **选择器走宿主 SDK 的页面内 DOM 树，不用 OS 原生对话框。**
+   `shell/shim/hostTree.ts` 直接复用 `otools-plugin-sdk` 的 `pickFromHostTree`
+   （数据只来自只读的 `tools_webview_browse_dialog`）。原生那条链（`dialog.open` /
+   `tools_webview_pick_folder`）在 macOS 上会「闪一下就再也弹不出来」——原生 sheet 与
+   宿主面板窗口的父子关系不稳定，第二次调用直接卡住，所以整条原生路径都**不要**碰。
+   另存为额外用一行输入框问文件名（SDK 的树没有文件名输入），样式复用 SDK 已注入的
+   `otools-host-tree-*` 类。
 3. **失败必须可见**：`requestMenuAction` 用 `pickOrReport()` 包一层，选路径抛错时弹宿主
    消息框；同时通过 `hostLog()` 把 `[zitext] ...` 写进 `~/.otools/log/core/webview.log`，
    现场排查看这个文件即可（含后端类型、`window.otools` / `__TAURI_INTERNALS__` 是否存在）。

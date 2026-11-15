@@ -7,7 +7,8 @@
  * dialogs go through the OTools host so the user always picks real paths.
  */
 import { emit } from '../event';
-import { getBackend, hostLog, isHostRuntime } from '../host';
+import { getBackend, isHostRuntime } from '../host';
+import { hostLog } from '../hostCommand';
 import { kvGet, kvHas, kvSet } from '../util';
 
 const DEFAULT_SETTINGS = {

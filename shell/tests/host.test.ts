@@ -1,32 +1,75 @@
 /**
- * 宿主桥回归测试：对话框必须走「宿主命令优先」的确定性路径。
+ * 宿主桥回归测试：选择器必须复用宿主 SDK 的 DOM 树，不能碰 OS 原生对话框。
  *
- * 背景（0.1.0 线上问题）：插件里点「打开文件夹」没有任何反应。原因是宿主
- * 选择器只走了 `window.otools.dialog.open`，而它的结果在「用户取消」和
- * 「宿主弹不出原生框」两种情况下都是 `null`，上层只能当作取消处理；同时
- * `window.otools.invokeNative()` 是**原生 cdylib** 桥，不是 tauri 命令通道，
- * 用它调 `tools_webview_*` 必然 reject。这里把两条约束都钉住。
+ * 背景（0.1.1 线上问题）：走宿主原生 picker 时，macOS 上对话框闪一下就再也
+ * 弹不出来（原生 sheet 与宿主面板窗口的父子关系不稳定，第二次调用直接卡住）。
+ * 现在选择器由 `otools-plugin-sdk` 的 `pickFromHostTree` 画在页面里，数据只来自
+ * `tools_webview_browse_dialog`。这里把三条约束钉住：① 走 SDK 的 DOM 树；
+ * ② 绝不调用原生 picker / dialog；③ zitext 自己的应用命令走
+ * `__TAURI_INTERNALS__`，不用原生 cdylib 桥 `invokeNative`。
  */
 import { beforeEach, describe, expect, it } from 'vitest';
 import { invoke } from '../shim/core';
 import { listen } from '../shim/event';
 import { getBackend, setBackend } from '../shim/host';
+import { resetPickerMemory } from '../shim/hostTree';
 
 type Call = { command: string; args: Record<string, unknown> };
+type Entry = { name: string; path: string; kind: string; size: number; mime: string };
 
 let calls: Call[];
 let nativeCalls: Call[];
 let hostCommands: Record<string, (args: Record<string, unknown>) => unknown>;
-let dialogOpen: (options: Record<string, unknown>) => unknown;
 
-const installHost = (options: {
-    commands?: Record<string, (args: Record<string, unknown>) => unknown>;
-    open?: (options: Record<string, unknown>) => unknown;
-} = {}) => {
+const dir = (path: string): Entry => ({
+    name: path.split('/').filter(Boolean).pop() ?? '/', path, kind: 'directory', size: 0, mime: '',
+});
+const file = (path: string, size = 12): Entry => ({
+    name: path.split('/').pop() ?? path, path, kind: 'file', size, mime: 'text/plain',
+});
+
+const TREE: Record<string, Entry[]> = {
+    '/work': [dir('/work/sub'), file('/work/a.txt'), file('/work/b.txt')],
+    '/work/sub': [file('/work/sub/c.txt')],
+};
+
+/**
+ * 复刻宿主 `resolve_dialog_target`：给一个完整文件路径时定位到它的父目录，
+ * 空路径回到默认目录（这里用 /work 代替 home）。
+ */
+const resolveTarget = (raw?: string | null): string => {
+    const requested = raw ? String(raw).trim() : '';
+    if (!requested) return '/work';
+    if (TREE[requested]) return requested;
+    const parent = requested.slice(0, requested.lastIndexOf('/')) || '/';
+    return TREE[parent] ? parent : '/work';
+};
+
+const installHost = (commands: Record<string, (args: Record<string, unknown>) => unknown> = {}) => {
     calls = [];
     nativeCalls = [];
-    hostCommands = options.commands ?? {};
-    dialogOpen = options.open ?? (() => null);
+    hostCommands = {
+        tools_webview_browse_dialog: (args) => {
+            const request = (args.request ?? {}) as { path?: string | null };
+            const path = resolveTarget(request.path);
+            const entries = TREE[path];
+            if (!entries) throw new Error(`目录不存在：${path}`);
+            const parent = path === '/work' ? '/' : path.slice(0, path.lastIndexOf('/')) || '/';
+            return {
+                currentPath: path,
+                parentPath: parent,
+                fileName: null,
+                roots: [{ path: '/work', name: 'work' }],
+                entries,
+            };
+        },
+        tools_webview_join_path: (args) => (args.parts as string[]).join('/'),
+        tools_webview_remove_entry: () => null,
+        tools_webview_rename_entry: () => null,
+        tools_webview_log: () => null,
+        otools_consume_open_files: () => ['/work/dropped.txt'],
+        ...commands,
+    };
 
     (window as any).__TAURI_INTERNALS__ = {
         invoke: async (command: string, args: Record<string, unknown> = {}) => {
@@ -40,13 +83,14 @@ const installHost = (options: {
         readHostFile: async (path: string) => ({ path, name: path, size: 0, lastModified: 0, dataBase64: '' }),
         listHostDir: async () => [],
         writeHostFile: async () => undefined,
+        browseHostDir: async (path: string) => hostCommands.tools_webview_browse_dialog({ request: { path } }),
         dialog: {
-            open: async (opts: Record<string, unknown>) => dialogOpen(opts),
-            save: async () => null,
+            open: async () => { throw new Error('不该走原生 dialog.open'); },
+            save: async () => { throw new Error('不该走原生 dialog.save'); },
             message: async () => undefined,
             confirm: async () => true,
         },
-        // 原生 cdylib 桥：任何调用都应当被视为「用错了通道」。
+        // 原生 cdylib 桥：SDK 会对未登记的命令先试这里再回落宿主命令。
         invokeNative: async (method: string, payload: Record<string, unknown>) => {
             nativeCalls.push({ command: method, args: payload ?? {} });
             throw new Error('native disabled');
@@ -54,87 +98,176 @@ const installHost = (options: {
     };
 };
 
+const tick = async (times = 4) => {
+    for (let i = 0; i < times; i += 1) await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+};
+
+async function waitFor<T extends Element>(selector: string): Promise<T> {
+    for (let i = 0; i < 80; i += 1) {
+        const found = document.querySelector(selector) as T | null;
+        if (found) return found;
+        await tick(2);
+    }
+    throw new Error(`等不到元素：${selector}`);
+}
+
+const click = (element: Element | null) => {
+    if (!element) throw new Error('要点击的元素不存在');
+    element.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+};
+const entry = (path: string): HTMLElement | null =>
+    document.querySelector<HTMLElement>(`[data-host-tree-entry][data-path="${path}"]`);
+const confirmButton = (): HTMLButtonElement | null =>
+    document.querySelector<HTMLButtonElement>('[data-host-tree-confirm]');
+
+/** 等选择器把目录渲染完（确认按钮可用），否则点它会被 disabled 挡掉。 */
+async function waitReady(): Promise<HTMLButtonElement> {
+    for (let i = 0; i < 80; i += 1) {
+        const button = confirmButton();
+        if (button && !button.disabled) return button;
+        await tick(2);
+    }
+    throw new Error('选择器没有就绪');
+}
+
 beforeEach(() => {
+    document.body.innerHTML = '';
     delete (window as any).__ZITEXT_HOST_BACKEND__;
     delete (window as any).__TAURI_INTERNALS__;
     delete (window as any).otools;
+    delete (window as any).__OToolsEnv;
+    resetPickerMemory();
     setBackend(null);
 });
 
-describe('文件夹 / 文件选择', () => {
-    it('优先调用宿主 picker 命令，命中时不再碰 dialog.open', async () => {
-        installHost({
-            commands: { tools_webview_pick_folder: () => ({ path: '/picked/folder', name: 'folder' }) },
-            open: () => { throw new Error('dialog.open 不该被调用'); },
-        });
+describe('DOM 选择器（宿主 SDK）', () => {
+    it('打开文件夹：渲染页面内选择器，确认返回当前目录', async () => {
+        installHost();
+        const pending = getBackend().pickFolder();
+        await waitReady();
 
-        expect(await getBackend().pickFolder()).toBe('/picked/folder');
-        expect(calls.map((c) => c.command)).toEqual(['tools_webview_pick_folder']);
-        expect(calls[0].args).toEqual({ options: { title: '打开文件夹' } });
+        click(confirmButton());
+        expect(await pending).toBe('/work');
+        expect(document.querySelector('.otools-host-tree-overlay')).toBeNull();
     });
 
-    it('宿主命令取消（null）时直接返回 null，不再弹第二个对话框', async () => {
-        installHost({
-            commands: { tools_webview_pick_folder: () => null },
-            open: () => { throw new Error('dialog.open 不该被调用'); },
-        });
+    it('点击文件夹进入子目录，再确认拿到子目录', async () => {
+        installHost();
+        const pending = getBackend().pickFolder();
+        await waitReady();
 
-        expect(await getBackend().pickFolder()).toBeNull();
-        expect(calls).toHaveLength(1);
+        click(entry('/work/sub'));
+        await waitFor('[data-host-tree-entry][data-path="/work/sub/c.txt"]');
+
+        click(confirmButton());
+        expect(await pending).toBe('/work/sub');
     });
 
-    it('宿主命令不可用时回落到 dialog.open，并规范化返回形状', async () => {
-        installHost({ open: () => [{ path: '/legacy/dir' }] });
+    it('打开文件：选中文件后确认返回该文件路径', async () => {
+        installHost();
+        const pending = getBackend().pickFile();
+        await waitFor('[data-host-tree-entry][data-path="/work/a.txt"]');
+        await tick(4);
 
-        expect(await getBackend().pickFolder()).toBe('/legacy/dir');
-        expect(calls.some((c) => c.command === 'tools_webview_pick_folder')).toBe(true);
+        const confirm = confirmButton()!;
+        expect(confirm.disabled).toBe(true);
+        click(entry('/work/a.txt'));
+        expect(confirm.disabled).toBe(false);
+
+        click(confirm);
+        expect(await pending).toBe('/work/a.txt');
     });
 
-    it('两层都拿不到路径时返回 null 而不是抛错', async () => {
-        installHost({ open: () => null });
-        expect(await getBackend().pickFolder()).toBeNull();
+    it('取消返回 null', async () => {
+        installHost();
+        const pending = getBackend().pickFolder();
+        await waitReady();
+
+        click(document.querySelector('[data-host-tree-cancel]'));
+        expect(await pending).toBeNull();
     });
 
-    it('打开文件取数组首个路径，另存为带 suggestedName', async () => {
-        installHost({
-            commands: {
-                tools_webview_pick_files: () => [{ path: '/work/a.txt' }, { path: '/work/b.txt' }],
-                tools_webview_pick_save_path: () => ({ path: '/work/note.txt', name: 'note.txt' }),
-            },
-        });
+    it('从不调用 OS 原生 picker 或 dialog', async () => {
+        installHost();
+        const pending = getBackend().pickFolder();
+        await waitReady();
+        click(confirmButton());
+        await pending;
 
-        expect(await getBackend().pickFile()).toBe('/work/a.txt');
-        expect(await getBackend().pickSave('note.txt')).toBe('/work/note.txt');
-        expect(calls.map((c) => c.command)).toEqual([
-            'tools_webview_pick_files',
-            'tools_webview_pick_save_path',
-        ]);
-        expect(calls[1].args).toEqual({ options: { title: '另存为', suggestedName: 'note.txt' } });
+        const forbidden = calls.filter((call) =>
+            call.command === 'tools_webview_pick_folder'
+            || call.command === 'tools_webview_pick_files'
+            || call.command === 'tools_webview_pick_save_path'
+            || call.command.startsWith('plugin:dialog|'));
+        expect(forbidden).toEqual([]);
+    });
+
+    it('目录读不出来时在弹层里显示错误，取消后返回 null', async () => {
+        installHost({ tools_webview_browse_dialog: () => { throw new Error('permission denied'); } });
+        const pending = getBackend().pickFolder();
+
+        const status = await waitFor<HTMLElement>('.otools-host-tree-status');
+        await tick(6);
+        expect(status.textContent).toContain('permission denied');
+
+        click(document.querySelector('[data-host-tree-cancel]'));
+        expect(await pending).toBeNull();
+    });
+
+    it('另存为：先选目录，再输入文件名，经宿主 join_path 拼成完整路径', async () => {
+        installHost();
+        const pending = getBackend().pickSave('/work/note.txt');
+
+        await waitReady();
+        click(confirmButton());
+
+        const input = await waitFor<HTMLInputElement>('[data-zt-name]');
+        expect(input.value).toBe('note.txt');
+        input.value = 'draft.md';
+        click(document.querySelector('[data-zt-ok]'));
+
+        expect(await pending).toBe('/work/draft.md');
+        const join = calls.find((call) => call.command === 'tools_webview_join_path');
+        expect(join?.args).toEqual({ parts: ['/work', 'draft.md'] });
+    });
+
+    it('另存为：文件名留空时不关闭，取消返回 null', async () => {
+        installHost();
+        const pending = getBackend().pickSave('/work/note.txt');
+        await waitReady();
+        click(confirmButton());
+
+        const input = await waitFor<HTMLInputElement>('[data-zt-name]');
+        input.value = '   ';
+        click(document.querySelector('[data-zt-ok]'));
+        await tick();
+        expect(document.querySelector('[data-zt-name]')).not.toBeNull();
+
+        click(document.querySelector('[data-zt-cancel]'));
+        expect(await pending).toBeNull();
     });
 });
 
 describe('菜单动作往返', () => {
-    it('open_folder 通过事件把宿主选中的真实路径交回上游', async () => {
-        installHost({ commands: { tools_webview_pick_folder: () => ({ path: '/work/project' }) } });
-
+    it('open_folder 通过事件把 DOM 选择器选中的路径交回上游', async () => {
+        installHost();
         const payloads: unknown[] = [];
         const unlisten = await listen('folder-from-dialog', (event) => { payloads.push(event.payload); });
-        await invoke('request_menu_action', { action: 'open_folder' });
+
+        const pending = invoke('request_menu_action', { action: 'open_folder' });
+        await waitReady();
+        click(confirmButton());
+        await pending;
         await unlisten();
 
-        expect(payloads).toEqual(['/work/project']);
+        expect(payloads).toEqual(['/work']);
     });
 });
 
 describe('tauri 命令通道', () => {
     it('删除 / 重命名 / 待打开文件都走 __TAURI_INTERNALS__，不用原生 cdylib 桥', async () => {
-        installHost({
-            commands: {
-                tools_webview_remove_entry: () => null,
-                tools_webview_rename_entry: () => null,
-                otools_consume_open_files: () => ['/work/dropped.txt'],
-            },
-        });
+        installHost();
         (window as any).__OToolsEnv = { pluginUuid: 'otools-zitext' };
 
         const backend = getBackend();
@@ -143,7 +276,7 @@ describe('tauri 命令通道', () => {
         expect(await backend.consumeOpenFiles!()).toEqual(['/work/dropped.txt']);
 
         expect(nativeCalls).toEqual([]);
-        expect(calls.map((c) => c.command)).toEqual([
+        expect(calls.map((call) => call.command)).toEqual([
             'tools_webview_remove_entry',
             'tools_webview_rename_entry',
             'otools_consume_open_files',

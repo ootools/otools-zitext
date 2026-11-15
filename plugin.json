@@ -29,7 +29,7 @@
     "比较"
   ],
   "summary": "ZITEXT Editor 的 OTools 插件版：Monaco 多标签编辑器、80+ 语言高亮、分屏、查找替换、文件比较、大文件日志查看器、JSON/XML/YAML 与文本数据工具。文件通过宿主读写本机磁盘，完全离线。",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "minOtoolsVersion": "0.9.0",
   "permissions": [],
   "fileAssociations": [
