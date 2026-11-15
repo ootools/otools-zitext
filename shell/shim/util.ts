@@ -1,4 +1,5 @@
 /** Shared helpers for the OTools port of ZITEXT (no Tauri dependency). */
+import { hostKvGet, hostKvSet, markWebBackend } from './hostStore';
 
 export function encodeBase64(bytes: Uint8Array): string {
     let binary = '';
@@ -118,8 +119,13 @@ export function basename(path: string): string {
 
 export const fileIdentity = (path: string, size: number, modified: number): string => `${normalizePath(path)}:${size}:${modified}`;
 
-/** Async key/value store backed by IndexedDB (crash-recovery snapshots can be
- *  several MB, well past localStorage's quota), with a localStorage fallback. */
+/** Async key/value store for app state (settings, session snapshot, scratchpad).
+ *
+ *  Primary backend is a host-side file (`hostStore.ts`): the plugin page lives on
+ *  the host's `otools-plugin://` origin, where IndexedDB is not guaranteed and
+ *  localStorage can be an opaque origin — both failures are silent, which looked
+ *  like "the editor forgets my tabs". IndexedDB (large crash-recovery snapshots)
+ *  then localStorage remain as the browser-preview fallback. */
 const DB_NAME = 'otools-zitext';
 const STORE = 'kv';
 let dbPromise: Promise<IDBDatabase | null> | null = null;
@@ -143,7 +149,7 @@ function openDb(): Promise<IDBDatabase | null> {
 
 function localKey(key: string): string { return `zitext.kv.${key}`; }
 
-export async function kvGet<T>(key: string): Promise<T | undefined> {
+async function readWebStorage<T>(key: string): Promise<T | undefined> {
     const db = await openDb();
     if (db) {
         try {
@@ -160,7 +166,7 @@ export async function kvGet<T>(key: string): Promise<T | undefined> {
     } catch { return undefined; }
 }
 
-export async function kvSet(key: string, value: unknown): Promise<void> {
+async function writeWebStorage(key: string, value: unknown): Promise<void> {
     const db = await openDb();
     if (db) {
         try {
@@ -176,4 +182,26 @@ export async function kvSet(key: string, value: unknown): Promise<void> {
     catch { /* quota exceeded: persistence is best-effort in browser preview */ }
 }
 
+export async function kvGet<T>(key: string): Promise<T | undefined> {
+    const fromHost = await hostKvGet<T>(key);
+    if (fromHost !== undefined) return fromHost;
+    const fromWeb = await readWebStorage<T>(key);
+    if (fromWeb !== undefined) {
+        // One-time migration: state written before the host store existed.
+        void hostKvSet(key, fromWeb);
+        markWebBackend();
+        return fromWeb;
+    }
+    return undefined;
+}
+
+export async function kvSet(key: string, value: unknown): Promise<void> {
+    if (await hostKvSet(key, value)) return;
+    await writeWebStorage(key, value);
+    markWebBackend();
+}
+
 export const kvHas = async (key: string): Promise<boolean> => (await kvGet(key)) !== undefined;
+
+/** Which backend the last read/write used — for the startup diagnostic log. */
+export { kvBackend, hostKvFlush } from './hostStore';

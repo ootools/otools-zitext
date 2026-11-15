@@ -89,8 +89,8 @@ export interface OToolsEnv {
     paths?: Record<string, string>;
 }
 export interface OToolsAPI {
-  copyText?(text: string): void;
-  showNotification?(body: string, clickFeatureCode?: string): void;
+    copyText?(text: string): void;
+    showNotification?(body: string, clickFeatureCode?: string): void;
     deepLinks?: import('./deep-links').DeepLinksApi;
     /** Synchronous current-page container query. */
     pageMode?(): import('./page-mode').PageMode;

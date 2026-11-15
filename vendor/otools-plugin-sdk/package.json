@@ -1,6 +1,6 @@
 {
   "name": "otools-plugin-sdk",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "OTools compatibility SDK for migrating Tauri apps into OTools plugins",
   "keywords": [
     "otools",

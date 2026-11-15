@@ -51,6 +51,15 @@ const TEXT_PATCHES = [
         replace: 'description="Updates are delivered by OTools; no network check is performed."',
         expected: 1,
     },
+    {
+        // Upstream's 30s cadence is tuned for a crash-recovery snapshot; here the
+        // session is also what restores tabs on the next launch, and a panel that
+        // is closed before the first tick would forget the tabs it just opened.
+        file: 'src/state/useEditorState.ts',
+        find: 'const SESSION_SAVE_INTERVAL_MS = 30_000; // periodic snapshot every 30 seconds',
+        replace: 'const SESSION_SAVE_INTERVAL_MS = 10_000; // periodic snapshot every 10 seconds',
+        expected: 1,
+    },
 ];
 
 function applyTextPatches() {

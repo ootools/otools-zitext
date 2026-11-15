@@ -17,12 +17,28 @@ Scratchpad、崩溃恢复、大文件警告与主题/字体设置。
 | 上游能力 | 插件版实现 |
 | --- | --- |
 | 文件读写 / 目录树 / 文件元数据 | `readHostFile` / `writeHostFile` / `listHostDir` |
-| 打开、打开文件夹、另存为对话框 | `window.otools.dialog`，返回本机真实路径 |
+| 打开、打开文件夹、另存为对话框 | 宿主 SDK 的页面内 DOM 树（`pickFromHostTree`），返回本机真实路径 |
 | 确认/提示对话框、剪贴板、外链 | 宿主 dialog、Clipboard API、`shellOpenExternal` |
-| settings.json / session.json / scratchpad / recent files | 插件自己的 IndexedDB（localStorage 兜底） |
+| settings.json / session.json / scratchpad / recent files | 宿主文件 `~/.otools/local/otools-zitext/kv-*.json`（IndexedDB / localStorage 兜底） |
 | 大文件日志查看器 | 宿主一次读入后在 webview 内建行索引、过滤、搜索、导出（≤256 MB） |
 | 原生菜单、窗口标题/全屏、CLI 启动参数 | 宿主接管；`otools_consume_open_files` 对接「打开方式」 |
 | 在线更新检查 | 关闭，由 OTools 插件市场统一发布 |
+
+### 相对上游的三处增强
+
+1. **记住上次打开的标签页**：上游的会话快照只是崩溃恢复，且状态存在 web 存储里；
+   插件页跑在宿主的 `otools-plugin://` 自定义 scheme 上，那里 IndexedDB / localStorage
+   并不保证可用，写入失败是静默的（症状就是「重启后标签全没了」）。现在状态落在
+   宿主文件 `~/.otools/local/otools-zitext/kv-session.json`，快照间隔也从 30s 收到 10s，
+   正常退出再启动会把上次的标签页、未保存草稿和光标位置一起带回来。
+2. **同时打开多个文件夹**：侧栏支持多个根目录。菜单「打开文件夹」或侧栏的
+   ➕ 会**追加**一个根（不再替换），每个根独立加载/刷新/报错，可用 × 单独移除；
+   过滤与文件计数跨根聚合，根列表随工作区一起持久化。
+   *已知限制*：Find in Files 仍只搜索主根（它挂在 App 上，改动会牵到上游 2000 行的
+   `App.tsx`）。
+3. **文件选择框的隐藏文件开关**：`otools-plugin-sdk` 的 `pickFromHostTree` 增加了
+   `showHidden` 选项与页脚「显示隐藏文件」勾选框，默认关闭（`.git`、`.env` 这类
+   条目先藏起来），切换只重画当前目录、不重新读盘。
 
 ## 目录结构
 
@@ -32,7 +48,8 @@ shell/
   shim/              @tauri-apps/* 的替身：core/event/window/app/dialog/clipboard
     backend/         fs.ts / state.ts / largeFile.ts：Rust 命令的 webview 实现
     host.ts          OTools 宿主 / 浏览器虚拟 FS 的统一后端抽象
-  src/               必须覆盖的上游文件（目前仅关闭在线更新检查）
+    hostStore.ts     宿主文件里的键值存储（设置/会话/工作区根，web 存储兜底）
+  src/               覆盖/新增的上游文件（多根目录侧栏、关闭在线更新检查）
   tests/             移植层回归测试
   index.html         插件入口（相对路径资源 + OTools 标记）
   vite.config.ts     alias + base:'./'（宿主用 otools-plugin:// 加载）
@@ -47,8 +64,9 @@ dist/                构建产物（提交进仓库，方便子模块直接安�
 `node scripts/sync-upstream.mjs --ref <tag>` 后重跑构建测试。
 
 `vendor/otools-plugin-sdk` 是宿主 SDK 的白名单快照（只有 `dist/` 与合规文件），
-同样有内容哈希锁定：升级宿主 SDK 用 `npm run sync-sdk -- --from <宿主仓库的
-vendor/otools-plugin-sdk>`，CI 会跑 `npm run check-sdk` 拦就地修改。
+同样有内容哈希锁定：升级宿主 SDK 时先在 SDK 仓跑一次 `npm run build`（它的 `dist/`
+不入库），再用 `npm run sync-sdk -- --from <宿主仓库的 vendor/otools-plugin-sdk>`
+覆盖过来；CI 会跑 `npm run check-sdk` 拦就地修改。
 
 ## 宿主桥接约定
 

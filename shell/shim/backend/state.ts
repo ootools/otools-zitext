@@ -9,7 +9,7 @@
 import { emit } from '../event';
 import { getBackend, isHostRuntime } from '../host';
 import { hostLog } from '../hostCommand';
-import { kvGet, kvHas, kvSet } from '../util';
+import { kvBackend, kvGet, kvHas, kvSet } from '../util';
 
 const DEFAULT_SETTINGS = {
     theme: 'system',
@@ -79,11 +79,16 @@ export async function getRecentFiles(): Promise<string[]> {
 export async function saveSession(args: Record<string, unknown>): Promise<void> {
     const session = Array.isArray(args.session) ? args.session : [];
     await kvSet('session', session);
+    hostLog(`save_session: ${session.length} 条（存储=${kvBackend()}）`);
 }
 
 export async function getLastSession(): Promise<unknown[]> {
     const session = await kvGet<unknown[]>('session');
-    return Array.isArray(session) ? session : [];
+    const entries = Array.isArray(session) ? session : [];
+    // Says whether tab restore has data to work with, and which store answered:
+    // a `web`/`none` backend on the host means persistence is falling back.
+    hostLog(`get_last_session: ${entries.length} 条（存储=${kvBackend()}）`);
+    return entries;
 }
 
 export async function readScratchpad(): Promise<string> {

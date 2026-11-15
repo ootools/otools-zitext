@@ -29,7 +29,7 @@ const file = (path: string, size = 12): Entry => ({
 });
 
 const TREE: Record<string, Entry[]> = {
-    '/work': [dir('/work/sub'), file('/work/a.txt'), file('/work/b.txt')],
+    '/work': [dir('/work/sub'), file('/work/a.txt'), file('/work/b.txt'), file('/work/.env', 20)],
     '/work/sub': [file('/work/sub/c.txt')],
 };
 
@@ -177,6 +177,23 @@ describe('DOM 选择器（宿主 SDK）', () => {
 
         click(confirm);
         expect(await pending).toBe('/work/a.txt');
+    });
+
+    it('隐藏文件默认不显示，勾选开关后才出现', async () => {
+        installHost();
+        const pending = getBackend().pickFile();
+        await waitFor('[data-host-tree-entry][data-path="/work/a.txt"]');
+        expect(entry('/work/.env')).toBeNull();
+
+        const toggle = document.querySelector<HTMLInputElement>('[data-host-tree-show-hidden]')!;
+        expect(toggle.checked).toBe(false);
+        toggle.checked = true;
+        toggle.dispatchEvent(new window.Event('change'));
+        expect(entry('/work/.env')).not.toBeNull();
+
+        click(entry('/work/.env'));
+        click(confirmButton());
+        expect(await pending).toBe('/work/.env');
     });
 
     it('取消返回 null', async () => {

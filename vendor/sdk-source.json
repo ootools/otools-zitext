@@ -1,10 +1,10 @@
 {
   "upstream": "https://github.com/ootools/otools-plugin-sdk",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "source": "otools/otools vendor/otools-plugin-sdk (dist only, 与宿主内置版本同源)",
-  "syncedAt": "2026-11-15T17:17:57.034Z",
+  "syncedAt": "2026-11-15T17:42:03.784Z",
   "fileCount": 90,
-  "treeHash": "570f03fdf84dfe7f38ba8d5abcf221f69bcf9048426215300fda04564bd4cc8b",
+  "treeHash": "8e3f2f668ad1b8e6cf4592e18470cf94878f9240090485b5e8b5b7866d0606ce",
   "entryPointsUsed": [
     "pickFromHostTree",
     "browseHostDir"

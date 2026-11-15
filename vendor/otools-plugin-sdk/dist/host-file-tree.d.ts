@@ -14,6 +14,11 @@ export interface PickFromHostTreeOptions {
         name: string;
         extensions: string[];
     }[];
+    /**
+     * 初始是否显示以 `.` 开头的隐藏项（`.git`、`.env`…），默认 false。
+     * 对话框里有一个开关可以随时切换，这里只决定打开时的初始状态。
+     */
+    showHidden?: boolean;
 }
 export type HostPickSource = 'host-tree';
 export interface HostPickResult {
