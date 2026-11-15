@@ -131,7 +131,11 @@ function main() {
   // 发布模式由 meta.json 决定；缺省按单合包处理，兼容手工放进来的包
   const metaPath = path.join(directory, 'meta.json');
   const meta = fs.existsSync(metaPath) ? JSON.parse(fs.readFileSync(metaPath, 'utf8')) : {};
-  const platformPackages = meta.packageMode === 1;
+  // meta.json 可能没随 artifact 一起下载：这时按实际包数推断模式，
+  // 避免把六分包误判成合包（历史 workflow 只上传 .oplg / 摘要）。
+  const platformPackages = fs.existsSync(metaPath)
+    ? meta.packageMode === 1
+    : fs.readdirSync(directory).filter((name) => name.endsWith('.oplg')).length > 1;
   const filenames = expectedPackageNames(packid, version, platformPackages);
   const present = fs.readdirSync(directory).filter((name) => name.endsWith('.oplg')).sort();
   const wanted = [...filenames].sort();

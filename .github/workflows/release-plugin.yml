@@ -88,6 +88,7 @@ jobs:
             dist-pack/plugin.json
             dist-pack/logo.svg
             dist-pack/SHA256SUMS
+            dist-pack/meta.json
           if-no-files-found: error
           retention-days: 14
       - name: 构建摘要
