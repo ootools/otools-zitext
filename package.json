@@ -1,6 +1,6 @@
 {
   "name": "otools-zitext",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "description": "ZITEXT Editor as an OTools standalone plugin: the full Monaco editor UI, backed by the OTools host filesystem API instead of a Tauri Rust backend.",
