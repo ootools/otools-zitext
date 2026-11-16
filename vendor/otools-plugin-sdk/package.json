@@ -1,6 +1,6 @@
 {
   "name": "otools-plugin-sdk",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "OTools compatibility SDK for migrating Tauri apps into OTools plugins",
   "keywords": [
     "otools",
@@ -9,14 +9,13 @@
     "plugin",
     "sdk"
   ],
-  "homepage": "https://github.com/farion1231/cc-switch/tree/main/otools-plugin-sdk",
+  "homepage": "https://github.com/ootools/otools-plugin-sdk#readme",
   "repository": {
     "type": "git",
-    "url": "https://github.com/farion1231/cc-switch.git",
-    "directory": "otools-plugin-sdk"
+    "url": "https://github.com/ootools/otools-plugin-sdk.git"
   },
   "bugs": {
-    "url": "https://github.com/farion1231/cc-switch/issues"
+    "url": "https://github.com/ootools/otools-plugin-sdk/issues"
   },
   "type": "module",
   "sideEffects": false,
@@ -83,6 +82,21 @@
       "types": "./dist/popup-manager.d.ts",
       "import": "./dist/popup-manager.js",
       "default": "./dist/popup-manager.js"
+    },
+    "./host-tree-factory": {
+      "types": "./dist/host-tree-factory.d.ts",
+      "import": "./dist/host-tree-factory.js",
+      "default": "./dist/host-tree-factory.js"
+    },
+    "./keyword-factory": {
+      "types": "./dist/keyword-factory.d.ts",
+      "import": "./dist/keyword-factory.js",
+      "default": "./dist/keyword-factory.js"
+    },
+    "./file-open-factory": {
+      "types": "./dist/file-open-factory.d.ts",
+      "import": "./dist/file-open-factory.js",
+      "default": "./dist/file-open-factory.js"
     },
     "./native-event-bridge": {
       "types": "./dist/native-event-bridge.d.ts",

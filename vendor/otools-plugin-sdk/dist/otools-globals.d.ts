@@ -89,6 +89,37 @@ export interface OToolsEnv {
     paths?: Record<string, string>;
 }
 export interface OToolsAPI {
+    /**
+     * Capability-set version of the injected API. Hosts older than the one that
+     * introduced the field leave it undefined; read it as
+     * `window.otools?.apiVersion ?? 0` and gate newer capabilities on it.
+     */
+    apiVersion?: number;
+    /**
+     * Generic command bridge (apiVersion >= 2) with built-in routing:
+     * `plugin:*` / `otools_host_*` / plugin-state commands go straight to the host;
+     * anything else is treated as one of the plugin's own methods and tried against
+     * the plugin's native cdylib first, falling back to the host when the library
+     * answers "unknown method" or is not enabled at all.
+     */
+    invoke?<T = unknown>(command: string, args?: Record<string, unknown>): Promise<T>;
+    /**
+     * Host-filesystem DOM picker (apiVersion >= 2). Same semantics as the SDK's
+     * `pickFromHostTree`; the only picker that works in remote / pure-web mode,
+     * where native dialogs open on the server and the remote user cannot see them.
+     */
+    pickFromHostTree?: import('./host-tree-factory').HostTreePicker;
+    /**
+     * Subscribe to host keyword dispatch (apiVersion >= 2). Same semantics as the
+     * SDK's `onOtoolsKeyword`; resolves to an unlisten function.
+     */
+    onOtoolsKeyword?: import('./keyword-factory').KeywordListener;
+    /**
+     * Subscribe to host file delivery (apiVersion >= 2) — the OS hands the plugin a
+     * file via double-click / drag. Same semantics as the SDK's `onOtoolsOpenFile`;
+     * resolves to an unlisten function.
+     */
+    onOtoolsOpenFile?: import('./file-open-factory').FileOpenListener;
     copyText?(text: string): void;
     showNotification?(body: string, clickFeatureCode?: string): void;
     deepLinks?: import('./deep-links').DeepLinksApi;
