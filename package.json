@@ -29,7 +29,7 @@
     "jsonc-parser": "^3.3.1",
     "marked": "^18.1.3",
     "monaco-editor": "^0.55.1",
-    "otools-plugin-sdk": "file:vendor/otools-plugin-sdk",
+    "otools-plugin-sdk": "^0.3.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "yaml": "^2.9.1"
