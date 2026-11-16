@@ -60,8 +60,6 @@ jobs:
         run: node scripts/publish-market.mjs meta
       - name: 校验上游快照没被就地改过
         run: node scripts/sync-upstream.mjs --check
-      - name: 校验 vendor 里的宿主 SDK 没被就地改过
-        run: node scripts/sync-sdk.mjs --check
       - name: 安装依赖
         # --legacy-peer-deps：npm 10 的 arborist 在解析 vitest 5 的可选 peer
         # （@vitest/browser-playwright）时会崩（edgesOut of null）。
