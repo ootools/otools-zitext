@@ -3,6 +3,9 @@ node_modules/
 .cache/
 .DS_Store
 *.log
+# 构建中间产物。发布走 dist-pack/（pack-plugin.mjs 从 dist/ 打包），
+# dist/ 本身是每次 build 都变的 hash 产物，不该进 git。
+dist/
 dist-pack/
 dist-release/
 .oplg.tmp

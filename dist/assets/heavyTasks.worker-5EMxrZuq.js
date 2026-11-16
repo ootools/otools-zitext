@@ -1,1 +1,0 @@
-function e(e){return new Worker(new URL(`heavyTasks.worker-Bh_EK0vE.js`,import.meta.url).href,{type:`module`,name:e?.name})}export{e as default};

@@ -1,1 +1,0 @@
-import{t as e}from"./host-DtWOp7-_.js";var t=()=>e().readClipboard(),n=t=>e().writeClipboard(t);export{n,t};
